@@ -118,7 +118,7 @@ function BookCard({ item }) {
                 <h3 className="text-2xl font-bold text-white mb-1">{item.title}</h3>
                 <p className="text-lg text-gray-300 mb-4">{item.author}</p>
                 <a href={item.url || "#"} target="_blank" rel="noopener noreferrer" className="inline-block bg-indigo-500 text-white font-bold py-2 px-4 rounded-full hover:bg-indigo-600 transition-colors">
-                    View on Goodreads
+                    View Book
                 </a>
             </div>
         </div>

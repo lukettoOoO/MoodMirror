@@ -4,6 +4,8 @@ from models import MoodRequest, AIResponse, FeedItem, ItemDetails # Importăm mo
 import google.generativeai as genai
 import os
 import json
+import httpx
+from typing import Optional
 
 # --- Configurare Inițială ---
 
@@ -48,7 +50,8 @@ response_schema = {
                 "properties": {
                     "contentType": {
                         "type": "STRING",
-                        "enum": ["quote", "song", "movie", "book", "tvShow", "article", "podcast", "art", "album", "playlist", "photography"]
+                        # AM ADĂUGAT "book_query" AICI
+                        "enum": ["quote", "song", "movie", "book", "tvShow", "article", "podcast", "art", "album", "playlist", "photography", "book_query"]
                     },
                     "details": {
                         "type": "OBJECT",
@@ -64,6 +67,7 @@ response_schema = {
                             "coverImg": {"type": "STRING"},
                             "sourceName": {"type": "STRING"},
                             "podcastName": {"type": "STRING"},
+                            "query": {"type": "STRING"} # <--- AM ADĂUGAT ASTA
                         }
                     }
                 },
@@ -73,6 +77,53 @@ response_schema = {
     },
     "required": ["detectedEmotion", "feed"]
 }
+
+# --- Funcții Utilitare (Servicii) ---
+
+async def search_google_books(query: str) -> Optional[ItemDetails]:
+    """
+    Caută o carte folosind Google Books API și returnează un ItemDetails
+    """
+    # API-ul Google Books nu necesită cheie pentru căutări simple
+    BOOKS_API_URL = "https://www.googleapis.com/books/v1/volumes"
+
+    # Folosim un client httpx asincron
+    async with httpx.AsyncClient() as client:
+        try:
+            # Facem cererea GET către API-ul Google Books
+            response = await client.get(
+                BOOKS_API_URL,
+                params={"q": query, "maxResults": 1, "projection": "lite"}
+            )
+            response.raise_for_status() # Aruncă o eroare dacă cererea eșuează
+
+            data = response.json()
+
+            if "items" in data and len(data["items"]) > 0:
+                book = data["items"][0]
+                info = book.get("volumeInfo", {})
+
+                # Extragem datele reale
+                title = info.get("title", "Titlu necunoscut")
+                author = info.get("authors", ["Autor necunoscut"])[0]
+                url = info.get("infoLink", "#")
+                # Obținem imaginea copertei
+                cover_img = info.get("imageLinks", {}).get("thumbnail")
+
+                # Returnăm un model ItemDetails completat cu date reale
+                return ItemDetails(
+                    title=title,
+                    author=author,
+                    url=url,
+                    coverImg=cover_img
+                )
+
+        except httpx.HTTPStatusError as e:
+            print(f"Eroare HTTP la căutarea cărții: {e}")
+        except Exception as e:
+            print(f"Eroare la procesarea Google Books API: {e}")
+
+    return None # Returnează None dacă nu se găsește nimic sau dacă apare o eroare
 
 # --- Endpoints ---
 
@@ -117,7 +168,7 @@ Each item in the 'feed' array must have a 'contentType' field and a 'details' fi
 - For "album": details must have "title", "artist", "url" (spotify.com link), and "imageUrl" (placeholder).
 - For "playlist": details must have "title", "sourceName" (e.g., "Spotify", "Apple Music"), and "url".
 - For "movie": details must have "title", "year" (number), "description" (1-2 sentences), "url" (imdb.com link), and "imageUrl" (placeholder).
-- For "book": details must have "title", "author", "url" (goodreads.com link), and "coverImg" (placeholder).
+- For "book": **Do not generate book details.** Instead, return: contentType: "book_query", details: {{ "query": "a good search term for a book here" }}
 - For "tvShow": details must have "title", "year" (number), "description" (1-2 sentences), "url" (imdb.com link), and "imageUrl" (placeholder).
 - For "article": details must have "title", "sourceName" (e.g., "Medium", "The New York Times"), and "url".
 - For "podcast": details must have "title" (episode title), "podcastName" (show name), and "url".
@@ -145,7 +196,50 @@ Also include a top-level 'detectedEmotion' field with the emotion you found."""
         # Parsează răspunsul JSON
         response_data = json.loads(response.text)
 
+        # --- PROCESARE NOUĂ A FEED-ULUI ---
+        # Aici se întâmplă magia
+
+        original_feed = response_data.get("feed", [])
+        processed_feed = [] # O nouă listă pentru feed-ul procesat
+
+        for item in original_feed:
+            content_type = item.get("contentType")
+            details = item.get("details", {})
+
+            if content_type == "book_query":
+                # Am primit o cerere de carte de la AI!
+                query = details.get("query")
+                if query:
+                    # Căutăm cartea reală folosind funcția noastră
+                    print(f"Se caută cartea: {query}")
+                    book_details = await search_google_books(query)
+
+                    if book_details:
+                        # Dacă găsim o carte, o adăugăm la feed-ul procesat
+                        # cu contentType-ul corect "book"
+                        processed_feed.append(FeedItem(
+                            contentType="book",
+                            details=book_details
+                        ))
+                    else:
+                        # Opțional: adaugă un placeholder dacă nu găsești
+                        print(f"Nu s-a găsit nicio carte pentru query: {query}")
+
+            else:
+                # Pentru orice alt tip de conținut (quote, song, etc.)
+                # îl adăugăm direct în listă
+                processed_feed.append(FeedItem(
+                    contentType=content_type,
+                    details=ItemDetails(**details)
+                ))
+
+        # Înlocuim feed-ul generat de AI cu feed-ul nostru procesat
+        response_data["feed"] = processed_feed
+
+        # --- SFÂRȘIT PROCESARE NOUĂ ---
+
         # Validează și returnează datele folosind modelul Pydantic
+        # Acum response_data["feed"] conține cărți reale!
         return AIResponse(**response_data)
 
     except Exception as e:
