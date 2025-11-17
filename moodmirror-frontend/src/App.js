@@ -207,7 +207,6 @@ export default function App() {
     const [toastMessage, setToastMessage] = useState("");
     const [showToast, setShowToast] = useState(false);
 
-    const apiKey = process.env.REACT_APP_GEMINI_API_KEY;; // This line is changed for the Preview environment
 
     // Function to trigger the toast
     const triggerToast = (message) => {
@@ -231,150 +230,44 @@ export default function App() {
         setFeedItems(null); // Clear previous feed
         setCurrentEmotion(null); // Clear previous emotion
 
-        // --- System Prompt Updated ---
-        const systemPrompt = `You are MoodMirror's "MirrorMatch Engine". Your task is to generate a personalized content feed.
-Analyze the user's emotion from their text input. Then, consider their chosen "intent".
-Based on the emotion and intent, return a JSON object containing a 'feed' key.
-This 'feed' key must be an array of 5-7 content items.
-Mix the content types: include a variety of 'quote', 'song', 'album', 'playlist', 'movie', 'book', 'tvShow', 'article', 'podcast', 'art', and 'photography'.
-Ensure at least one media item (not just quotes) is included if possible.
-The user's text is: "${userInput}"
-The user's intent is: "${selectedIntent}" (${intents[selectedIntent].description})
+        // Backend URL
+        const backendUrl = 'http://localhost:8000/recommend';
 
-Respond *only* with the JSON object. Do not include markdown.
-Each item in the 'feed' array must have a 'contentType' field and a 'details' field.
-- For "quote": details must have "text" and "author". If no author is known, use "Unknown".
-- For "song": details must have "title", "artist", "url" (a plausible spotify.com link), and "imageUrl" (placeholder).
-- For "album": details must have "title", "artist", "url" (spotify.com link), and "imageUrl" (placeholder).
-- For "playlist": details must have "title", "sourceName" (e.g., "Spotify", "Apple Music"), and "url".
-- For "movie": details must have "title", "year" (number), "description" (1-2 sentences), "url" (imdb.com link), and "imageUrl" (placeholder).
-- For "book": details must have "title", "author", "url" (goodreads.com link), and "coverImg" (placeholder).
-- For "tvShow": details must have "title", "year" (number), "description" (1-2 sentences), "url" (imdb.com link), and "imageUrl" (placeholder).
-- For "article": details must have "title", "sourceName" (e.g., "Medium", "The New York Times"), and "url".
-- For "podcast": details must have "title" (episode title), "podcastName" (show name), and "url".
-- For "art": details must have "title", "artist", "url" (viewing link), and "imageUrl" (placeholder).
-- For "photography": details must have "title", "artist" (photographer), "url", and "imageUrl".
-Also include a top-level 'detectedEmotion' field with the emotion you found.`;
-
-        // --- Response Schema Updated ---
-        const responseSchema = {
-            type: "OBJECT",
-            properties: {
-                "detectedEmotion": { "type": "STRING" },
-                "feed": {
-                    type: "ARRAY",
-                    items: {
-                        type: "OBJECT",
-                        properties: {
-                            "contentType": {
-                                "type": "STRING",
-                                "enum": ["quote", "song", "movie", "book", "tvShow", "article", "podcast", "art", "album", "playlist", "photography"]
-                            },
-                            "details": {
-                                type: "OBJECT",
-                                properties: {
-                                    // All possible properties
-                                    "text": { "type": "STRING" },
-                                    "author": { "type": "STRING" },
-                                    "title": { "type": "STRING" },
-                                    "artist": { "type": "STRING" },
-                                    "url": { "type": "STRING" },
-                                    "year": { "type": "NUMBER" },
-                                    "description": { "type": "STRING" },
-                                    "imageUrl": { "type": "STRING" },
-                                    "coverImg": { "type": "STRING" },
-                                    "sourceName": { "type": "STRING" },
-                                    "podcastName": { "type": "STRING" },
-                                },
-                            }
-                        },
-                        required: ["contentType", "details"]
-                    }
-                }
-            },
-            required: ["detectedEmotion", "feed"]
-        };
-
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-
+        // Simplified payload matching FastAPI's MoodRequest model
         const payload = {
-            contents: [{
-                parts: [{ text: "Analyze this input." }] // The real prompt is in systemInstruction
-            }],
-            systemInstruction: {
-                parts: [{ text: systemPrompt }]
-            },
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: responseSchema
-            }
+            text_input: userInput,
+            mood_intent: selectedIntent
         };
-
-        // ... (Fetch/retry logic remains the same) ...
-        let response;
-        let retries = 3;
-        let delay = 1000;
-        let success = false;
-
-        for (let i = 0; i < retries; i++) {
-            try {
-                response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (response.ok) { success = true; break; }
-                if (response.status === 429 || response.status >= 500) {
-                    console.warn(`API request failed, retrying in ${delay}ms...`);
-                    await new Promise(res => setTimeout(res, delay));
-                    delay *= 2;
-                } else {
-                    throw new Error(`API Error: ${response.status} ${response.statusText}`);
-                }
-            } catch (error) {
-                console.error("Fetch error:", error);
-                if (i < retries - 1) {
-                    await new Promise(res => setTimeout(res, delay));
-                    delay *= 2;
-                } else {
-                    setFeedItems([{
-                        contentType: 'error',
-                        details: {
-                            emotion: "Error",
-                            text: "Could not get a response. Check your network connection."
-                        }
-                    }]);
-                    setLoading(false);
-                    return;
-                }
-            }
-        }
-
-        if (!success || !response) {
-            setFeedItems([{ contentType: 'error', details: { emotion: "Error", text: "Could not get a response after retries." } }]);
-            setLoading(false);
-            return;
-        }
 
         try {
-            const apiResult = await response.json();
-            const jsonText = apiResult.candidates?.[0]?.content?.parts?.[0]?.text;
+            const response = await fetch(backendUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+            });
 
-            if (jsonText) {
-                const data = JSON.parse(jsonText);
-                setFeedItems(data.feed); // Set the new feed array
-                setCurrentEmotion(data.detectedEmotion); // Set the detected emotion
-            } else {
-                console.error("Invalid response structure:", apiResult);
-                throw new Error("Invalid response from API.");
+            if (!response.ok) {
+                // Try to read error from backend
+                const errorData = await response.json();
+                throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
             }
+
+            // Backend returns formatted data directly
+            const data = await response.json();
+
+            setFeedItems(data.feed); // Set the new feed
+            setCurrentEmotion(data.detectedEmotion); // Set detected emotion
+
         } catch (error) {
-            console.error("Error processing API response:", error);
+            console.error("Error fetching recommendation:", error);
+            // Display structured error in UI
             setFeedItems([{
                 contentType: 'error',
                 details: {
-                    emotion: "Error",
-                    text: "Failed to process the API response."
+                    emotion: "Frontend Error",
+                    text: `Could not connect to backend: ${error.message}. Make sure the FastAPI server is running at http://localhost:8000.`
                 }
             }]);
         } finally {
@@ -527,13 +420,6 @@ Also include a top-level 'detectedEmotion' field with the emotion you found.`;
                         </button>
                     </form>
 
-                    {/* API Key Warning */}
-                    {/* This logic is wrapped to be safe in the preview environment */}
-                    {!apiKey && typeof process !== 'undefined' && process.env.NODE_ENV === 'development' && (
-                        <div className="mt-4 p-3 bg-red-800 border border-red-600 rounded-lg text-center text-red-200">
-                            <strong>API Key Missing.</strong> Please add your <code>REACT_APP_GEMINI_API_KEY</code> to a <code>.env</code> file.
-                        </div>
-                    )}
 
                 </div>
 
